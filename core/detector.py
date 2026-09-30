@@ -325,15 +325,18 @@ class AuratDetector:
                             mask_exclude = np.zeros(belly_crop.shape[:2], dtype=np.uint8)
                             if kpts is not None and kconf is not None and len(kpts) >= 17:
                                 for elbow_idx, wrist_idx in [(7, 9), (8, 10)]:
-                                    if kconf[wrist_idx] > 0.25:
-                                        wx = int(kpts[wrist_idx][0]) - torso_w1
-                                        wy = int(kpts[wrist_idx][1]) - belly_y1
-                                        cv2.circle(mask_exclude, (wx, wy), 36, 255, -1)
-                                        cv2.circle(mask_exclude, (wx, wy + 20), 30, 255, -1)
-                                        if kconf[elbow_idx] > 0.25:
-                                            ex = int(kpts[elbow_idx][0]) - torso_w1
-                                            ey = int(kpts[elbow_idx][1]) - belly_y1
-                                            cv2.line(mask_exclude, (ex, ey), (wx, wy), 255, thickness=32)
+                                    try:
+                                        if float(kconf[wrist_idx]) > 0.25:
+                                            wx = int(float(kpts[wrist_idx][0])) - torso_w1
+                                            wy = int(float(kpts[wrist_idx][1])) - belly_y1
+                                            cv2.circle(mask_exclude, (wx, wy), 36, (255, 255, 255), -1)
+                                            cv2.circle(mask_exclude, (wx, wy + 20), 30, (255, 255, 255), -1)
+                                            if float(kconf[elbow_idx]) > 0.25:
+                                                ex = int(float(kpts[elbow_idx][0])) - torso_w1
+                                                ey = int(float(kpts[elbow_idx][1])) - belly_y1
+                                                cv2.line(mask_exclude, (ex, ey), (wx, wy), (255, 255, 255), 32)
+                                    except Exception:
+                                        pass
 
                             kulit_perut, blob_ratio = hitung_persen_kulit_detail(belly_crop, mask_exclude=mask_exclude)
 

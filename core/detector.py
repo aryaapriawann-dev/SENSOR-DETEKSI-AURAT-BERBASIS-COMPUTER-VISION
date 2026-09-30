@@ -17,28 +17,64 @@ from .config import YOLO_MODEL_PATH, BASE_DIR
 from .tracker import PersonTracker
 
 
-def hitung_persen_kulit(crop_bgr):
-    """Menghitung persentase piksel kulit menggunakan segmentasi ganda HSV + YCrCb yang adaptif."""
+def hitung_persen_kulit(crop_bgr, mask_exclude=None):
+    """
+    Menghitung persentase piksel kulit asli manusia dengan filter presisi tinggi:
+    - HSV Hue ketat 0..15 & 172..180 (membuang kain seragam krem, cokelat, khaki yang H=18..35).
+    - Kaidah biologis hemoglobin darah manusia: R > G > B dan (R - G) >= 14.
+    - YCrCb chrominance spesifik: Cr in [135, 175], Cb in [85, 127].
+    - Mendukung mask_exclude untuk mengecualikan tangan/lengan yang bersedekap/menutupi perut.
+    """
+    pct, _ = hitung_persen_kulit_detail(crop_bgr, mask_exclude=mask_exclude)
+    return pct
+
+
+def hitung_persen_kulit_detail(crop_bgr, mask_exclude=None):
+    """Mengembalikan (persentase_kulit, rasio_blob_kulit_terbesar_kontinyu)."""
     if crop_bgr is None or crop_bgr.size == 0 or crop_bgr.shape[0] < 6 or crop_bgr.shape[1] < 6:
-        return 0.0
+        return 0.0, 0.0
     
     hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
     ycrcb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2YCrCb)
 
-    # Rentang warna kulit presisi (toleran terhadap ragam pencahayaan & skin tone)
-    mask_hsv1 = cv2.inRange(hsv, np.array([0, 20, 50]), np.array([25, 240, 255]))
-    mask_hsv2 = cv2.inRange(hsv, np.array([170, 20, 50]), np.array([180, 240, 255]))
+    # 1. Filter HSV Ketat (Kulit manusia asli: Hue 0..15 & 172..180, bukan kain seragam krem/cokelat H=18..35)
+    mask_hsv1 = cv2.inRange(hsv, np.array([0, 32, 60]), np.array([15, 255, 255]))
+    mask_hsv2 = cv2.inRange(hsv, np.array([172, 32, 60]), np.array([180, 255, 255]))
     mask_hsv = cv2.bitwise_or(mask_hsv1, mask_hsv2)
 
-    mask_ycrcb = cv2.inRange(ycrcb, np.array([0, 133, 77]), np.array([255, 173, 127]))
+    # 2. Filter YCrCb (Karakteristik melanin & hemoglobin)
+    mask_ycrcb = cv2.inRange(ycrcb, np.array([50, 135, 85]), np.array([255, 175, 127]))
     skin_mask = cv2.bitwise_and(mask_hsv, mask_ycrcb)
+
+    # 3. Kaidah Biologis Hemoglobin (Membedakan kulit vs kain cokelat/krem)
+    b = crop_bgr[:, :, 0].astype(np.int32)
+    g = crop_bgr[:, :, 1].astype(np.int32)
+    r = crop_bgr[:, :, 2].astype(np.int32)
+    mask_bio = ((r > g) & (g > b) & ((r - g) >= 14) & (r >= 85)).astype(np.uint8) * 255
+    skin_mask = cv2.bitwise_and(skin_mask, mask_bio)
+
+    # 4. Eksklusi Area Lengan & Tangan jika ada
+    if mask_exclude is not None and mask_exclude.shape[:2] == skin_mask.shape[:2]:
+        skin_mask[mask_exclude > 0] = 0
+        valid_pixels = int(np.count_nonzero(mask_exclude == 0))
+    else:
+        valid_pixels = crop_bgr.shape[0] * crop_bgr.shape[1]
+
+    if valid_pixels <= 0:
+        return 0.0, 0.0
 
     kernel = np.ones((3, 3), np.uint8)
     skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel)
 
     pixel_kulit = cv2.countNonZero(skin_mask)
-    total_pixel = crop_bgr.shape[0] * crop_bgr.shape[1]
-    return (pixel_kulit / float(total_pixel)) * 100.0 if total_pixel > 0 else 0.0
+    pct = (pixel_kulit / float(valid_pixels)) * 100.0
+
+    # 5. Hitung blob kulit kontinyu terbesar (perut terbuka membentuk 1 bidang kulit yang luas)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(skin_mask)
+    largest_blob = max(stats[1:, cv2.CC_STAT_AREA]) if num_labels > 1 else 0
+    blob_ratio = largest_blob / float(valid_pixels)
+
+    return pct, blob_ratio
 
 
 class AuratDetector:
@@ -282,19 +318,38 @@ class AuratDetector:
                             belly_y2 = max(belly_y1 + 10, min(h, hip_y + int(torso_h * 0.10)))
 
                             belly_crop = frame[belly_y1:belly_y2, torso_w1:torso_w2]
-                            kulit_perut = hitung_persen_kulit(belly_crop)
 
-                            # Jika baju disingkap ke atas atau perut/pusar diperlihatkan
-                            if kulit_perut > 20.0:
+                            # ── EKSKLUSI TANGAN / LENGAN BAWAH DI DEPAN PERUT ──
+                            # Tangan bukan aurat pria. Jika bersedekap/menaruh tangan di perut,
+                            # area tangan dieksklusi agar tidak disangka perut terbuka.
+                            mask_exclude = np.zeros(belly_crop.shape[:2], dtype=np.uint8)
+                            if kpts is not None and kconf is not None and len(kpts) >= 17:
+                                for elbow_idx, wrist_idx in [(7, 9), (8, 10)]:
+                                    if kconf[wrist_idx] > 0.25:
+                                        wx = int(kpts[wrist_idx][0]) - torso_w1
+                                        wy = int(kpts[wrist_idx][1]) - belly_y1
+                                        cv2.circle(mask_exclude, (wx, wy), 36, 255, -1)
+                                        cv2.circle(mask_exclude, (wx, wy + 20), 30, 255, -1)
+                                        if kconf[elbow_idx] > 0.25:
+                                            ex = int(kpts[elbow_idx][0]) - torso_w1
+                                            ey = int(kpts[elbow_idx][1]) - belly_y1
+                                            cv2.line(mask_exclude, (ex, ey), (wx, wy), 255, thickness=32)
+
+                            kulit_perut, blob_ratio = hitung_persen_kulit_detail(belly_crop, mask_exclude=mask_exclude)
+
+                            # Verifikasi perut telanjang asli:
+                            # 1. Persentase kulit di luar tangan harus tinggi (> 24%)
+                            # 2. Harus membentuk 1 bidang kulit kontinyu yang luas (blob_ratio > 0.16)
+                            if kulit_perut > 24.0 and blob_ratio > 0.16:
                                 detail_pelanggaran.append("Pusar/Perut Terbuka")
                                 zones_pelanggaran.append((torso_w1, belly_y1, torso_w2, belly_y2, "PUSAR/PERUT"))
 
-                            # Periksa juga area dada atas
+                            # Periksa area dada atas (hanya jika tanpa baju)
                             chest_y1 = max(0, min(h, sh_y + 10))
                             chest_y2 = max(chest_y1 + 10, min(h, sh_y + int(torso_h * 0.40)))
                             chest_crop = frame[chest_y1:chest_y2, torso_w1:torso_w2]
-                            kulit_dada = hitung_persen_kulit(chest_crop)
-                            if kulit_dada > 30.0:
+                            kulit_dada, blob_dada = hitung_persen_kulit_detail(chest_crop)
+                            if kulit_dada > 35.0 and blob_dada > 0.20:
                                 detail_pelanggaran.append("Dada Terbuka")
                                 zones_pelanggaran.append((torso_w1, chest_y1, torso_w2, chest_y2, "DADA"))
 
@@ -306,8 +361,8 @@ class AuratDetector:
                             chest_y2 = max(chest_y1 + 10, min(h, py2 - 5))
                             if (chest_y2 - chest_y1) > 25 and (torso_w2 - torso_w1) > 30:
                                 chest_crop = frame[chest_y1:chest_y2, torso_w1:torso_w2]
-                                kulit_dada = hitung_persen_kulit(chest_crop)
-                                if kulit_dada > 38.0:
+                                kulit_dada, blob_dada = hitung_persen_kulit_detail(chest_crop)
+                                if kulit_dada > 40.0 and blob_dada > 0.25:
                                     detail_pelanggaran.append("Dada Terbuka")
                                     zones_pelanggaran.append((torso_w1, chest_y1, torso_w2, chest_y2, "DADA"))
 
@@ -318,8 +373,8 @@ class AuratDetector:
                             thigh_w1 = px1 + int(bw * 0.16)
                             thigh_w2 = px2 - int(bw * 0.16)
                             thigh_crop = frame[thigh_y1:thigh_y2, thigh_w1:thigh_w2]
-                            kulit_paha = hitung_persen_kulit(thigh_crop)
-                            if kulit_paha > 22.0:
+                            kulit_paha, blob_paha = hitung_persen_kulit_detail(thigh_crop)
+                            if kulit_paha > 25.0 and blob_paha > 0.18:
                                 detail_pelanggaran.append("Paha/Lutut Terbuka")
                                 zones_pelanggaran.append((thigh_w1, thigh_y1, thigh_w2, thigh_y2, "PAHA"))
 

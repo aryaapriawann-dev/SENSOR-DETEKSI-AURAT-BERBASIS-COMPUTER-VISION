@@ -149,6 +149,8 @@ class AuratDetector:
                 sh_x2 = px2 - int(bw * 0.20)
                 hip_y = None
                 knee_y = None
+                kpts: Any = None
+                kconf: Any = None
 
                 if has_kpts and len(res_person.keypoints) > p_idx:
                     kpts = res_person.keypoints.xy[p_idx].cpu().numpy()

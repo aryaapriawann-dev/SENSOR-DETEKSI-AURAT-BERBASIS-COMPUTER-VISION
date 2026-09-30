@@ -1,0 +1,12 @@
+path: D:/AURAT DATA SET/datasets/syari_dataset
+train: train/images
+val: valid/images
+test: valid/images
+
+nc: 5
+names:
+  0: HijabSyar-i
+  1: Non Syar-i
+  2: Non hijab
+  3: Cadar_Niqab
+  4: Mukena

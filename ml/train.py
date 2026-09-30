@@ -11,6 +11,10 @@ site_pack = os.path.expanduser(r"~\AppData\Local\Packages\PythonSoftwareFoundati
 if os.path.exists(site_pack) and site_pack not in sys.path:
     sys.path.append(site_pack)
 
+BASE_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_PROJECT_DIR not in sys.path:
+    sys.path.insert(0, BASE_PROJECT_DIR)
+
 from ultralytics import YOLO  # type: ignore
 from core.config import BASE_DIR, MODELS_DIR, YOLO_MODEL_PATH  # type: ignore
 
@@ -21,7 +25,7 @@ def find_yaml():
             return found[0]
     return "data.yaml"
 
-def train(data_yaml: str | None = None, epochs: int = 15, imgsz: int = 224, pretrained: str = "models/yolov8n.pt"):
+def train(data_yaml: str | None = None, epochs: int = 10, imgsz: int = 224, pretrained: str = "models/yolov8n.pt"):
     if data_yaml is None or not os.path.exists(data_yaml):
         data_yaml = find_yaml()
 
@@ -45,21 +49,30 @@ def train(data_yaml: str | None = None, epochs: int = 15, imgsz: int = 224, pret
         imgsz=imgsz,
         project=project_run,
         name="training_result",
+        exist_ok=True,
         device="cpu",
         workers=2
     )
 
-    # Copy output weights to models/aurat_best.pt
-    best_candidate = os.path.join(project_run, "training_result", "weights", "best.pt")
+    # Ambil output weights terbaik dari run ini
+    save_dir = getattr(results, "save_dir", None)
+    best_candidate = os.path.join(save_dir, "weights", "best.pt") if save_dir else None
+    
+    if not best_candidate or not os.path.exists(best_candidate):
+        best_candidate = os.path.join(project_run, "training_result", "weights", "best.pt")
     if not os.path.exists(best_candidate):
         best_candidate = os.path.join(BASE_DIR, "runs", "detect", "runs", "aurat_model", "training_result", "weights", "best.pt")
 
     if os.path.exists(best_candidate):
         os.makedirs(MODELS_DIR, exist_ok=True)
         shutil.copyfile(best_candidate, YOLO_MODEL_PATH)
+        # Salin juga ke root jika file root ada
+        root_model = os.path.join(BASE_DIR, "aurat_best.pt")
+        shutil.copyfile(best_candidate, root_model)
         print("\n" + "=" * 60)
-        print("TRAINING MONOREPO SELESAI!")
+        print("TRAINING MODEL AURAT & SYAR'I SELESAI!")
         print(f"Model .pt tersimpan di: {YOLO_MODEL_PATH}")
+        print(f"Model .pt tersimpan di: {root_model}")
         print("=" * 60)
 
 if __name__ == "__main__":

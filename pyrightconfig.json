@@ -1,0 +1,17 @@
+{
+  "include": [
+    "."
+  ],
+  "extraPaths": [
+    ".",
+    "core",
+    "apps",
+    "ml",
+    "C:/Users/aryaz/AppData/Local/Packages/PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0/LocalCache/local-packages/Python312/site-packages"
+  ],
+  "typeCheckingMode": "off",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "reportGeneralTypeIssues": "none",
+  "reportUnknownMemberType": "none"
+}

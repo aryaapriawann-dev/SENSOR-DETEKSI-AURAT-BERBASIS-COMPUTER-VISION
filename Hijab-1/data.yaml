@@ -1,0 +1,15 @@
+names:
+- HijabSyar-i
+- Non Syar-i
+- Non hijab
+nc: 3
+roboflow:
+  license: CC BY 4.0
+  project: hijab-ztppw
+  url: https://universe.roboflow.com/musrifatul-arifah-t2onk/hijab-ztppw/dataset/1
+  version: 1
+  workspace: musrifatul-arifah-t2onk
+path: D:/AURAT DATA SET/Hijab-1
+train: train/images
+val: valid/images
+test: test/images

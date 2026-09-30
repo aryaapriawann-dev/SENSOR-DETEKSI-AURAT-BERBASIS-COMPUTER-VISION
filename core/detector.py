@@ -214,11 +214,12 @@ class AuratDetector:
                     arm_r_x1 = max(0, px2 - arm_w)
                     arm_r_x2 = min(w, px2)
 
-                    # ── B. PEMERIKSAAN KEPALA (Rambut & Hijab Syar'i via YOLO Model) ──
+                    # ── B. PEMERIKSAAN KEPALA (Rambut & Hijab Syar'i via YOLO Model & Analisis Cadar) ──
                     head_crop = frame[py1:head_bottom, px1:px2]
                     non_hijab_found = False
                     hijab_syari_found = False
                     non_syari_found = False
+                    cadar_found = False
                     best_conf = 0.0
 
                     if head_crop.size > 0:
@@ -236,7 +237,7 @@ class AuratDetector:
                                 a_conf = float(abox.conf[0])
                                 a_label = self.model_aurat.names[a_cls]
 
-                                if a_label == "Non hijab" and a_conf > 0.32:
+                                if a_label == "Non hijab" and a_conf > 0.35:
                                     non_hijab_found = True
                                     best_conf = max(best_conf, a_conf)
                                 elif "HijabSyar" in a_label and a_conf > 0.30:
@@ -246,9 +247,22 @@ class AuratDetector:
                                     non_syari_found = True
                                     best_conf = max(best_conf, a_conf)
 
+                        # Deteksi Khusus CADAR / NIQAB (Penutup wajah syar'i)
+                        hh, hw = head_crop.shape[:2]
+                        if hh >= 20 and hw >= 20:
+                            lower_face = head_crop[int(hh * 0.45):, :]
+                            kulit_lower_face = hitung_persen_kulit(lower_face)
+                            upper_head = head_crop[:int(hh * 0.38), :]
+                            kulit_upper_head = hitung_persen_kulit(upper_head)
+
+                            # Cadar/Niqab: Wajah bawah (hidung, mulut, dagu) tertutup kain (< 8% kulit),
+                            # dahi/rambut tertutup kain (< 8% kulit), dan tidak terdeteksi rambut terbuka
+                            if kulit_lower_face < 8.0 and kulit_upper_head < 8.0 and not non_hijab_found:
+                                cadar_found = True
+
                     # ── C. PEMERIKSAAN LEHER & DADA ──
                     neck_crop = frame[neck_y1:neck_y2, neck_x1:neck_x2]
-                    kulit_leher = hitung_persen_kulit(neck_crop)
+                    kulit_leher = 0.0 if cadar_found else hitung_persen_kulit(neck_crop)
 
                     # ── D. PEMERIKSAAN LENGAN TANGAN (Kiri & Kanan) ──
                     arm_l_crop = frame[arm_y1:arm_y2, arm_l_x1:arm_l_x2]
@@ -261,17 +275,17 @@ class AuratDetector:
                         detail_pelanggaran.append("Rambut Terbuka")
                         zones_pelanggaran.append((px1, py1, px2, head_bottom, "RAMBUT"))
 
-                    if non_syari_found:
+                    if non_syari_found and not cadar_found:
                         detail_pelanggaran.append("Leher Terbuka")
                         zones_pelanggaran.append((neck_x1, neck_y1, neck_x2, neck_y2, "LEHER"))
-                    elif kulit_leher > 14.0 and not hijab_syari_found:
+                    elif kulit_leher > 14.0 and not hijab_syari_found and not cadar_found:
                         detail_pelanggaran.append("Leher Terbuka")
                         zones_pelanggaran.append((neck_x1, neck_y1, neck_x2, neck_y2, "LEHER"))
 
-                    if kulit_lengan_l > 16.0:
+                    if kulit_lengan_l > 18.0:
                         detail_pelanggaran.append("Lengan Kiri")
                         zones_pelanggaran.append((arm_l_x1, arm_y1, arm_l_x2, arm_y2, "LENGAN"))
-                    if kulit_lengan_r > 16.0:
+                    if kulit_lengan_r > 18.0:
                         detail_pelanggaran.append("Lengan Kanan")
                         zones_pelanggaran.append((arm_r_x1, arm_y1, arm_r_x2, arm_y2, "LENGAN"))
 
@@ -293,16 +307,22 @@ class AuratDetector:
                             label_txt = "Aurat: Lengan Terbuka"
                         else:
                             label_txt = f"Aurat: {detail_pelanggaran[0]}"
+                    elif cadar_found:
+                        status = "AMAN"
+                        label_txt = "Bercadar / Syar'i (Tertutup Sempurna)"
                     elif hijab_syari_found:
                         status = "AMAN"
                         label_txt = f"Mukena/Hijab Syar'i ({best_conf*100:.0f}%)"
-                    elif not hijab_syari_found and not non_syari_found:
+                    elif non_syari_found:
+                        status = "PELANGGARAN"
+                        label_txt = "Aurat: Hijab Belum Syar'i"
+                    elif not non_hijab_found and kulit_leher < 12.0:
+                        status = "AMAN"
+                        label_txt = "Hijab Sesuai Syariat"
+                    else:
                         status = "PELANGGARAN"
                         label_txt = "Aurat: Belum Berhijab"
                         zones_pelanggaran.append((px1, py1, px2, head_bottom, "RAMBUT"))
-                    else:
-                        status = "AMAN"
-                        label_txt = "Pakaian Sesuai Syariat"
 
                 else:  # LAKI-LAKI (Kaidah Syariat Islam: Batas aurat dari pusar s.d. lutut)
                     if sh_y is not None:

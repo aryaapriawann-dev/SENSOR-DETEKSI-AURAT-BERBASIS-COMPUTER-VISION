@@ -14,6 +14,9 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+print("[*] Memulai Smart Mosque Gate...")
+print("[*] Sedang memuat pustaka AI (YOLOv8 & PyTorch), mohon tunggu 3-5 detik...")
+
 import time
 import math
 import cv2  # type: ignore

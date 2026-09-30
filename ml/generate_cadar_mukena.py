@@ -66,7 +66,7 @@ def create_cadar_image(img_bgr, bbox_norm):
         [cadar_x1 - int(fw * 0.08), cadar_y2]
     ], np.int32)
     
-    cv2.fillPoly(cadar_mask, [pts], 255)
+    cv2.fillPoly(cadar_mask, [pts], (255, 255, 255))
     cadar_mask = cv2.GaussianBlur(cadar_mask, (7, 7), 0)
 
     # Buat tekstur kain dengan sedikit noise & gradien lipatan
@@ -129,14 +129,14 @@ def create_mukena_image(img_bgr, bbox_norm):
         [x2 + int(fw * 0.30), y2 + int(fh * 0.35)],
         [x1 - int(fw * 0.30), y2 + int(fh * 0.35)]
     ], np.int32)
-    cv2.fillPoly(mukena_mask, [hood_pts], 255)
+    cv2.fillPoly(mukena_mask, [hood_pts], (255, 255, 255))
 
     # Face cutout (oval wajah yang terbuka: dahi s.d. dagu)
     face_cx = int((x1 + x2) / 2)
     face_cy = int(y1 + fh * 0.45)
     face_ax1 = int(fw * 0.32)
     face_ax2 = int(fh * 0.36)
-    cv2.ellipse(mukena_mask, (face_cx, face_cy), (face_ax1, face_ax2), 0, 0, 360, 0, -1)
+    cv2.ellipse(mukena_mask, (face_cx, face_cy), (face_ax1, face_ax2), 0.0, 0.0, 360.0, (0, 0, 0), -1)
     
     mukena_mask = cv2.GaussianBlur(mukena_mask, (9, 9), 0)
 

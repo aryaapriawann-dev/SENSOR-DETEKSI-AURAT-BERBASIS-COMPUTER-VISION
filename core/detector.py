@@ -235,27 +235,77 @@ class AuratDetector:
                         status = "AMAN"
                         label_txt = "Pakaian Sesuai Syariat"
 
-                else:  # LAKI-LAKI
-                    # Batas Aurat Laki-Laki: Antara pusar dan lutut
-                    if aspect_ratio >= 1.8:
-                        thigh_y1 = max(0, min(h, py1 + int(bh * 0.48)))
-                        thigh_y2 = max(thigh_y1 + 5, min(h, py1 + int(bh * 0.72)))
-                        thigh_x1 = max(0, min(w, px1 + int(bw * 0.20)))
-                        thigh_x2 = max(thigh_x1 + 5, min(w, px2 - int(bw * 0.20)))
+                else:  # LAKI-LAKI (Kaidah Syariat: Batas aurat dari pusar s.d. lutut)
+                    # ── A. PEMERIKSAAN PUSAR & PERUT (Wajib tertutup bagi pria) ──
+                    if aspect_ratio >= 1.7:
+                        # Badan Penuh (Full Body berdiri)
+                        belly_y1 = max(0, min(h, py1 + int(bh * 0.32)))
+                        belly_y2 = max(belly_y1 + 10, min(h, py1 + int(bh * 0.54)))
+                    else:
+                        # Setengah Badan / Upper Body / Depan Webcam
+                        belly_y1 = max(0, min(h, py1 + int(bh * 0.35)))
+                        belly_y2 = max(belly_y1 + 10, min(h, py1 + int(bh * 0.90)))
+
+                    belly_x1 = max(0, min(w, px1 + int(bw * 0.18)))
+                    belly_x2 = max(belly_x1 + 10, min(w, px2 - int(bw * 0.18)))
+
+                    belly_crop = frame[belly_y1:belly_y2, belly_x1:belly_x2]
+                    kulit_perut = hitung_persen_kulit(belly_crop)
+
+                    # Jika baju disingkap / telanjang dada, area perut & pusar memperlihatkan kulit
+                    if kulit_perut > 13.0:
+                        detail_pelanggaran.append("Pusar/Perut Terbuka")
+                        zones_pelanggaran.append((belly_x1, belly_y1, belly_x2, belly_y2, "PUSAR/PERUT"))
+
+                    # ── B. PEMERIKSAAN DADA & TORSO ATAS ──
+                    chest_y1 = max(0, min(h, py1 + int(bh * 0.20)))
+                    chest_y2 = max(chest_y1 + 10, min(h, py1 + int(bh * 0.42)))
+                    chest_x1 = max(0, min(w, px1 + int(bw * 0.20)))
+                    chest_x2 = max(chest_x1 + 10, min(w, px2 - int(bw * 0.20)))
+
+                    chest_crop = frame[chest_y1:chest_y2, chest_x1:chest_x2]
+                    kulit_dada = hitung_persen_kulit(chest_crop)
+
+                    if kulit_dada > 18.0:
+                        detail_pelanggaran.append("Dada Terbuka")
+                        zones_pelanggaran.append((chest_x1, chest_y1, chest_x2, chest_y2, "DADA"))
+
+                    # ── C. PEMERIKSAAN PAHA & LUTUT (Untuk tampilan badan penuh) ──
+                    if aspect_ratio >= 1.4:
+                        thigh_y1 = max(0, min(h, py1 + int(bh * 0.50)))
+                        thigh_y2 = max(thigh_y1 + 10, min(h, py1 + int(bh * 0.78)))
+                        thigh_x1 = max(0, min(w, px1 + int(bw * 0.16)))
+                        thigh_x2 = max(thigh_x1 + 10, min(w, px2 - int(bw * 0.16)))
+
                         thigh_crop = frame[thigh_y1:thigh_y2, thigh_x1:thigh_x2]
                         kulit_paha = hitung_persen_kulit(thigh_crop)
 
-                        if kulit_paha > 25.0:
-                            status = "PELANGGARAN"
-                            label_txt = "Aurat: Paha/Lutut Terbuka"
-                            detail_pelanggaran.append("Paha Terbuka")
+                        if kulit_paha > 16.0:
+                            detail_pelanggaran.append("Paha/Lutut Terbuka")
                             zones_pelanggaran.append((thigh_x1, thigh_y1, thigh_x2, thigh_y2, "PAHA"))
+
+                    # ── D. KEPUTUSAN STATUS AKHIR PRIA ──
+                    if len(detail_pelanggaran) > 0:
+                        status = "PELANGGARAN"
+                        has_pusar = "Pusar/Perut Terbuka" in detail_pelanggaran
+                        has_dada = "Dada Terbuka" in detail_pelanggaran
+                        has_paha = "Paha/Lutut Terbuka" in detail_pelanggaran
+
+                        if (has_pusar or has_dada) and has_paha:
+                            label_txt = "Aurat Pria: Perut & Paha Terbuka"
+                        elif has_pusar and has_dada:
+                            label_txt = "Aurat Pria: Pusar/Perut Terbuka"
+                        elif has_pusar:
+                            label_txt = "Aurat Pria: Pusar/Perut Terbuka"
+                        elif has_dada:
+                            label_txt = "Aurat Pria: Dada Terbuka"
+                        elif has_paha:
+                            label_txt = "Aurat Pria: Paha Terbuka"
                         else:
-                            status = "AMAN"
-                            label_txt = f"Pria Sesuai Kaidah ({conf_score*100:.0f}%)"
+                            label_txt = f"Aurat Pria: {detail_pelanggaran[0]}"
                     else:
                         status = "AMAN"
-                        label_txt = f"Pria Sesuai Kaidah ({conf_score*100:.0f}%)"
+                        label_txt = f"Pria Sesuai Syariat ({conf_score*100:.0f}%)"
 
                 raw_boxes.append([px1, py1, px2, py2])
                 raw_statuses.append((status, label_txt, conf_score, detail_pelanggaran, zones_pelanggaran))

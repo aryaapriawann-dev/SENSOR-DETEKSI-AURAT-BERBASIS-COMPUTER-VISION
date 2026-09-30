@@ -43,12 +43,14 @@ def hitung_persen_kulit(crop_bgr):
 
 class AuratDetector:
     def __init__(self, model_aurat_path: str = YOLO_MODEL_PATH):
-        # 1. Model Deteksi Manusia (Multi-Person Detector)
-        person_model_path = os.path.join(BASE_DIR, "models", "yolov8n.pt")
+        # 1. Model Deteksi Manusia & Pose (YOLOv8-Pose)
+        person_model_path = os.path.join(BASE_DIR, "models", "yolov8n-pose.pt")
         if not os.path.exists(person_model_path):
-            person_model_path = "yolov8n.pt"
+            person_model_path = os.path.join(BASE_DIR, "models", "yolov8n.pt")
+        if not os.path.exists(person_model_path):
+            person_model_path = "yolov8n-pose.pt"
         
-        print(f"[AuratDetector] Memuat Person Detector dari: {person_model_path}")
+        print(f"[AuratDetector] Memuat Person & Pose Detector dari: {person_model_path}")
         self.model_person = YOLO(person_model_path)
 
         # 2. Model Klasifikasi Aurat / Hijab
@@ -84,7 +86,8 @@ class AuratDetector:
         res_person: Any = pred_person[0] if pred_person else None
 
         if res_person is not None and getattr(res_person, "boxes", None) is not None:
-            for pbox in res_person.boxes:
+            has_kpts = hasattr(res_person, "keypoints") and res_person.keypoints is not None
+            for p_idx, pbox in enumerate(res_person.boxes):
                 px1, py1, px2, py2 = map(int, pbox.xyxy[0])
                 # Batasi koordinat ke dimensi frame
                 px1 = max(0, px1)
@@ -96,10 +99,40 @@ class AuratDetector:
                 bh = py2 - py1
 
                 # Abaikan kotak yang terlalu kecil (potongan tangan, objek parsial, noise)
-                if bw < 75 or bh < 120:
+                if bw < 75 or bh < 100:
                     continue
 
                 aspect_ratio = bh / float(max(1, bw))
+
+                # ── EKSTRAKSI KEYPOINTS POSE ANATOMI TUBUH ──
+                # 5: Bahu Kiri, 6: Bahu Kanan
+                # 11: Pinggul Kiri, 12: Pinggul Kanan
+                # 13: Lutut Kiri, 14: Lutut Kanan
+                sh_y = None
+                sh_x1 = px1 + int(bw * 0.20)
+                sh_x2 = px2 - int(bw * 0.20)
+                hip_y = None
+                knee_y = None
+
+                if has_kpts and len(res_person.keypoints) > p_idx:
+                    kpts = res_person.keypoints.xy[p_idx].cpu().numpy()
+                    kconf = res_person.keypoints.conf[p_idx].cpu().numpy() if res_person.keypoints.conf is not None else None
+
+                    if kpts is not None and kconf is not None and len(kpts) >= 17:
+                        valid_sh = [j for j in [5, 6] if kconf[j] > 0.35]
+                        if valid_sh:
+                            sh_y = int(np.mean([kpts[j][1] for j in valid_sh]))
+                            if len(valid_sh) == 2:
+                                sh_x1 = max(0, int(min(kpts[5][0], kpts[6][0])))
+                                sh_x2 = min(w, int(max(kpts[5][0], kpts[6][0])))
+
+                        valid_hip = [j for j in [11, 12] if kconf[j] > 0.35]
+                        if valid_hip:
+                            hip_y = int(np.mean([kpts[j][1] for j in valid_hip]))
+
+                        valid_knee = [j for j in [13, 14] if kconf[j] > 0.35]
+                        if valid_knee:
+                            knee_y = int(np.mean([kpts[j][1] for j in valid_knee]))
 
                 # Default status
                 status = "AMAN"
@@ -109,25 +142,27 @@ class AuratDetector:
                 zones_pelanggaran = []
 
                 if mode == "PEREMPUAN":
-                    # ── A. PEMBAGIAN ZONA ADAPTIF (Full Body vs Upper Body/Webcam) ──
-                    if aspect_ratio >= 2.0:
-                        # Badan Penuh (Full body berdiri)
+                    # ── A. PEMBAGIAN ZONA ADAPTIF DENGAN BANTUAN POSE ──
+                    if sh_y is not None:
+                        head_bottom = min(h, max(py1 + 20, sh_y))
+                        neck_y1 = max(0, sh_y - int((sh_y - py1) * 0.38))
+                        neck_y2 = min(h, sh_y + 15)
+                        arm_y1 = sh_y
+                        arm_y2 = min(h, sh_y + int(bh * 0.50))
+                    elif aspect_ratio >= 2.0:
                         head_bottom = py1 + int(bh * 0.24)
                         neck_y1 = py1 + int(bh * 0.16)
                         neck_y2 = py1 + int(bh * 0.28)
                         arm_y1 = py1 + int(bh * 0.25)
                         arm_y2 = py1 + int(bh * 0.65)
-                        arm_w = int(bw * 0.28)
                     else:
-                        # Setengah Badan / Duduk di Webcam
                         head_bottom = py1 + int(bh * 0.38)
                         neck_y1 = py1 + int(bh * 0.26)
                         neck_y2 = py1 + int(bh * 0.44)
                         arm_y1 = py1 + int(bh * 0.36)
                         arm_y2 = py1 + int(bh * 0.85)
-                        arm_w = int(bw * 0.30)
 
-                    # Batasi koordinat zona ke dimensi frame
+                    arm_w = int(bw * 0.28)
                     head_bottom = min(h, max(py1 + 20, head_bottom))
                     neck_y1 = max(0, min(h, neck_y1))
                     neck_y2 = max(neck_y1 + 5, min(h, neck_y2))
@@ -184,12 +219,10 @@ class AuratDetector:
                     kulit_lengan_r = hitung_persen_kulit(arm_r_crop)
 
                     # ── E. EVALUASI KAIDAH SYARIAT PEREMPUAN ──
-                    # 1. Cek Rambut
                     if non_hijab_found:
                         detail_pelanggaran.append("Rambut Terbuka")
                         zones_pelanggaran.append((px1, py1, px2, head_bottom, "RAMBUT"))
 
-                    # 2. Cek Leher (Mukena/hijab wajib menutup leher sempurna)
                     if non_syari_found:
                         detail_pelanggaran.append("Leher Terbuka")
                         zones_pelanggaran.append((neck_x1, neck_y1, neck_x2, neck_y2, "LEHER"))
@@ -197,7 +230,6 @@ class AuratDetector:
                         detail_pelanggaran.append("Leher Terbuka")
                         zones_pelanggaran.append((neck_x1, neck_y1, neck_x2, neck_y2, "LEHER"))
 
-                    # 3. Cek Lengan Tangan (Mukena/baju panjang wajib menutup pergelangan tangan)
                     if kulit_lengan_l > 16.0:
                         detail_pelanggaran.append("Lengan Kiri")
                         zones_pelanggaran.append((arm_l_x1, arm_y1, arm_l_x2, arm_y2, "LENGAN"))
@@ -205,7 +237,6 @@ class AuratDetector:
                         detail_pelanggaran.append("Lengan Kanan")
                         zones_pelanggaran.append((arm_r_x1, arm_y1, arm_r_x2, arm_y2, "LENGAN"))
 
-                    # 4. Keputusan Akhir Status & Label
                     if len(detail_pelanggaran) > 0:
                         status = "PELANGGARAN"
                         has_rambut = "Rambut Terbuka" in detail_pelanggaran
@@ -235,56 +266,73 @@ class AuratDetector:
                         status = "AMAN"
                         label_txt = "Pakaian Sesuai Syariat"
 
-                else:  # LAKI-LAKI (Kaidah Syariat: Batas aurat dari pusar s.d. lutut)
-                    # ── A. PEMERIKSAAN PUSAR & PERUT (Wajib tertutup bagi pria) ──
-                    if aspect_ratio >= 1.7:
-                        # Badan Penuh (Full Body berdiri)
-                        belly_y1 = max(0, min(h, py1 + int(bh * 0.32)))
-                        belly_y2 = max(belly_y1 + 10, min(h, py1 + int(bh * 0.54)))
-                    else:
-                        # Setengah Badan / Upper Body / Depan Webcam
-                        belly_y1 = max(0, min(h, py1 + int(bh * 0.35)))
-                        belly_y2 = max(belly_y1 + 10, min(h, py1 + int(bh * 0.90)))
+                else:  # LAKI-LAKI (Kaidah Syariat Islam: Batas aurat dari pusar s.d. lutut)
+                    if sh_y is not None:
+                        # Wajah & Kepala berada di ATAS sh_y sehingga WAJAH TIDAK AKAN PERNAH disangka dada/perut
+                        torso_w1 = max(px1, sh_x1)
+                        torso_w2 = min(w, sh_x2)
+                        if torso_w2 - torso_w1 < 25:
+                            torso_w1 = px1 + int(bw * 0.20)
+                            torso_w2 = px2 - int(bw * 0.20)
 
-                    belly_x1 = max(0, min(w, px1 + int(bw * 0.18)))
-                    belly_x2 = max(belly_x1 + 10, min(w, px2 - int(bw * 0.18)))
+                        if hip_y is not None and hip_y > sh_y + 30:
+                            # Kasus: Torso bawah dan pusar masuk frame kamera (badan setengah/penuh)
+                            torso_h = hip_y - sh_y
+                            belly_y1 = max(0, min(h, sh_y + int(torso_h * 0.42)))
+                            belly_y2 = max(belly_y1 + 10, min(h, hip_y + int(torso_h * 0.10)))
 
-                    belly_crop = frame[belly_y1:belly_y2, belly_x1:belly_x2]
-                    kulit_perut = hitung_persen_kulit(belly_crop)
+                            belly_crop = frame[belly_y1:belly_y2, torso_w1:torso_w2]
+                            kulit_perut = hitung_persen_kulit(belly_crop)
 
-                    # Jika baju disingkap / telanjang dada, area perut & pusar memperlihatkan kulit
-                    if kulit_perut > 13.0:
-                        detail_pelanggaran.append("Pusar/Perut Terbuka")
-                        zones_pelanggaran.append((belly_x1, belly_y1, belly_x2, belly_y2, "PUSAR/PERUT"))
+                            # Jika baju disingkap ke atas atau perut/pusar diperlihatkan
+                            if kulit_perut > 20.0:
+                                detail_pelanggaran.append("Pusar/Perut Terbuka")
+                                zones_pelanggaran.append((torso_w1, belly_y1, torso_w2, belly_y2, "PUSAR/PERUT"))
 
-                    # ── B. PEMERIKSAAN DADA & TORSO ATAS ──
-                    chest_y1 = max(0, min(h, py1 + int(bh * 0.20)))
-                    chest_y2 = max(chest_y1 + 10, min(h, py1 + int(bh * 0.42)))
-                    chest_x1 = max(0, min(w, px1 + int(bw * 0.20)))
-                    chest_x2 = max(chest_x1 + 10, min(w, px2 - int(bw * 0.20)))
+                            # Periksa juga area dada atas
+                            chest_y1 = max(0, min(h, sh_y + 10))
+                            chest_y2 = max(chest_y1 + 10, min(h, sh_y + int(torso_h * 0.40)))
+                            chest_crop = frame[chest_y1:chest_y2, torso_w1:torso_w2]
+                            kulit_dada = hitung_persen_kulit(chest_crop)
+                            if kulit_dada > 30.0:
+                                detail_pelanggaran.append("Dada Terbuka")
+                                zones_pelanggaran.append((torso_w1, chest_y1, torso_w2, chest_y2, "DADA"))
 
-                    chest_crop = frame[chest_y1:chest_y2, chest_x1:chest_x2]
-                    kulit_dada = hitung_persen_kulit(chest_crop)
+                        else:
+                            # Kasus: Close-up webcam (Hanya kepala & bahu/dada atas).
+                            # Pinggul/Pusar berada di bawah jangkauan kamera, jadi pusar TIDAK BISA dideteksi terbuka.
+                            # Hanya deteksi jika BERTELANJANG DADA sama sekali (tanpa kaos):
+                            chest_y1 = max(0, min(h, sh_y + 15))
+                            chest_y2 = max(chest_y1 + 10, min(h, py2 - 5))
+                            if (chest_y2 - chest_y1) > 25 and (torso_w2 - torso_w1) > 30:
+                                chest_crop = frame[chest_y1:chest_y2, torso_w1:torso_w2]
+                                kulit_dada = hitung_persen_kulit(chest_crop)
+                                if kulit_dada > 38.0:
+                                    detail_pelanggaran.append("Dada Terbuka")
+                                    zones_pelanggaran.append((torso_w1, chest_y1, torso_w2, chest_y2, "DADA"))
 
-                    if kulit_dada > 18.0:
-                        detail_pelanggaran.append("Dada Terbuka")
-                        zones_pelanggaran.append((chest_x1, chest_y1, chest_x2, chest_y2, "DADA"))
+                        # ── Pemeriksaan Paha / Lutut (Jika tampak) ──
+                        if hip_y is not None and knee_y is not None and knee_y > hip_y + 20:
+                            thigh_y1 = hip_y
+                            thigh_y2 = min(h, knee_y)
+                            thigh_w1 = px1 + int(bw * 0.16)
+                            thigh_w2 = px2 - int(bw * 0.16)
+                            thigh_crop = frame[thigh_y1:thigh_y2, thigh_w1:thigh_w2]
+                            kulit_paha = hitung_persen_kulit(thigh_crop)
+                            if kulit_paha > 22.0:
+                                detail_pelanggaran.append("Paha/Lutut Terbuka")
+                                zones_pelanggaran.append((thigh_w1, thigh_y1, thigh_w2, thigh_y2, "PAHA"))
 
-                    # ── C. PEMERIKSAAN PAHA & LUTUT (Untuk tampilan badan penuh) ──
-                    if aspect_ratio >= 1.4:
-                        thigh_y1 = max(0, min(h, py1 + int(bh * 0.50)))
-                        thigh_y2 = max(thigh_y1 + 10, min(h, py1 + int(bh * 0.78)))
-                        thigh_x1 = max(0, min(w, px1 + int(bw * 0.16)))
-                        thigh_x2 = max(thigh_x1 + 10, min(w, px2 - int(bw * 0.16)))
+                    elif aspect_ratio >= 1.6:
+                        # Fallback jika keypoints tidak terbaca tapi badan berdiri penuh
+                        belly_y1 = max(0, min(h, py1 + int(bh * 0.40)))
+                        belly_y2 = max(belly_y1 + 10, min(h, py1 + int(bh * 0.60)))
+                        belly_crop = frame[belly_y1:belly_y2, px1 + int(bw * 0.20): px2 - int(bw * 0.20)]
+                        if hitung_persen_kulit(belly_crop) > 22.0:
+                            detail_pelanggaran.append("Pusar/Perut Terbuka")
+                            zones_pelanggaran.append((px1 + int(bw * 0.20), belly_y1, px2 - int(bw * 0.20), belly_y2, "PUSAR/PERUT"))
 
-                        thigh_crop = frame[thigh_y1:thigh_y2, thigh_x1:thigh_x2]
-                        kulit_paha = hitung_persen_kulit(thigh_crop)
-
-                        if kulit_paha > 16.0:
-                            detail_pelanggaran.append("Paha/Lutut Terbuka")
-                            zones_pelanggaran.append((thigh_x1, thigh_y1, thigh_x2, thigh_y2, "PAHA"))
-
-                    # ── D. KEPUTUSAN STATUS AKHIR PRIA ──
+                    # ── KEPUTUSAN STATUS AKHIR PRIA ──
                     if len(detail_pelanggaran) > 0:
                         status = "PELANGGARAN"
                         has_pusar = "Pusar/Perut Terbuka" in detail_pelanggaran
@@ -293,8 +341,6 @@ class AuratDetector:
 
                         if (has_pusar or has_dada) and has_paha:
                             label_txt = "Aurat Pria: Perut & Paha Terbuka"
-                        elif has_pusar and has_dada:
-                            label_txt = "Aurat Pria: Pusar/Perut Terbuka"
                         elif has_pusar:
                             label_txt = "Aurat Pria: Pusar/Perut Terbuka"
                         elif has_dada:

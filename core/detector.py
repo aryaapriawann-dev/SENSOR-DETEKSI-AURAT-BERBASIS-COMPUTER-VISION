@@ -4,6 +4,7 @@ Mendeteksi banyak orang sekaligus secara real-time dan melacak posisi tubuh (mel
 """
 import os
 import sys
+from typing import Any
 import cv2  # type: ignore
 import numpy as np  # type: ignore
 
@@ -72,16 +73,17 @@ class AuratDetector:
         raw_statuses = []
 
         # 1. Deteksi Semua Manusia (Multi-Person) menggunakan YOLOv8 Nano
-        res_person = self.model_person.predict(
+        pred_person: Any = self.model_person.predict(
             source=frame,
             classes=[0],     # Class 0 = Person (COCO dataset)
             conf=0.50,       # Naikkan threshold agar bagian tubuh (misal tangan) tidak dideteksi orang terpisah
             iou=0.45,        # Filter Non-Maximum Suppression antar kotak
             verbose=False,
             imgsz=320
-        )[0]
+        )
+        res_person: Any = pred_person[0] if pred_person else None
 
-        if res_person and res_person.boxes:
+        if res_person is not None and getattr(res_person, "boxes", None) is not None:
             for pbox in res_person.boxes:
                 px1, py1, px2, py2 = map(int, pbox.xyxy[0])
                 # Batasi koordinat ke dimensi frame
@@ -147,14 +149,15 @@ class AuratDetector:
                     best_conf = 0.0
 
                     if head_crop.size > 0:
-                        res_aurat = self.model_aurat.predict(
+                        pred_aurat: Any = self.model_aurat.predict(
                             source=head_crop,
                             conf=0.28,
                             verbose=False,
                             imgsz=224
-                        )[0]
+                        )
+                        res_aurat: Any = pred_aurat[0] if pred_aurat else None
 
-                        if res_aurat and res_aurat.boxes:
+                        if res_aurat is not None and getattr(res_aurat, "boxes", None) is not None:
                             for abox in res_aurat.boxes:
                                 a_cls = int(abox.cls[0])
                                 a_conf = float(abox.conf[0])

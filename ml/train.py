@@ -21,7 +21,7 @@ def find_yaml():
             return found[0]
     return "data.yaml"
 
-def train(data_yaml: str = None, epochs: int = 15, imgsz: int = 224, pretrained: str = "models/yolov8n.pt"):
+def train(data_yaml: str | None = None, epochs: int = 15, imgsz: int = 224, pretrained: str = "models/yolov8n.pt"):
     if data_yaml is None or not os.path.exists(data_yaml):
         data_yaml = find_yaml()
 

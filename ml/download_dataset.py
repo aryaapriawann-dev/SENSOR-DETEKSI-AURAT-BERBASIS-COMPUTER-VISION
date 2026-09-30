@@ -11,7 +11,7 @@ if os.path.exists(site_pack) and site_pack not in sys.path:
 
 from core.config import DATASETS_DIR  # type: ignore
 
-def download(api_key: str, workspace: str = "musrifatul-arifah-t2onk", project_id: str = "hijab-ztppw", version: int = 1, target_dir: str = None):
+def download(api_key: str, workspace: str = "musrifatul-arifah-t2onk", project_id: str = "hijab-ztppw", version: int = 1, target_dir: str | None = None):
     try:
         from roboflow import Roboflow  # type: ignore
     except ImportError:

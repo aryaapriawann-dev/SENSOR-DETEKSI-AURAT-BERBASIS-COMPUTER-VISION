@@ -110,11 +110,11 @@ class AuratDetector:
         raw_boxes = []
         raw_statuses = []
 
-        # 1. Deteksi Semua Manusia (Multi-Person) menggunakan YOLOv8 Nano
+        # 1. Deteksi Semua Manusia (Multi-Person) menggunakan YOLOv8 Nano Pose
         pred_person: Any = self.model_person.predict(
             source=frame,
             classes=[0],     # Class 0 = Person (COCO dataset)
-            conf=0.50,       # Naikkan threshold agar bagian tubuh (misal tangan) tidak dideteksi orang terpisah
+            conf=0.38,       # Sensitivitas optimal: mendeteksi manusia penuh maupun close-up setengah badan
             iou=0.45,        # Filter Non-Maximum Suppression antar kotak
             verbose=False,
             imgsz=320
@@ -134,8 +134,8 @@ class AuratDetector:
                 bw = px2 - px1
                 bh = py2 - py1
 
-                # Abaikan kotak yang terlalu kecil (potongan tangan, objek parsial, noise)
-                if bw < 75 or bh < 100:
+                # Abaikan kotak yang terlalu kecil (objek parsial / noise jauh)
+                if bw < 60 or bh < 80:
                     continue
 
                 aspect_ratio = bh / float(max(1, bw))
@@ -214,7 +214,10 @@ class AuratDetector:
                     arm_r_x1 = max(0, px2 - arm_w)
                     arm_r_x2 = min(w, px2)
 
-                    # ── B. PEMERIKSAAN KEPALA (YOLO Model 5-Kelas: Cadar, Mukena, Hijab Syar'i, Non Syar'i, Non Hijab) ──
+                    # ── B. PEMERIKSAAN KEPALA & BUSANA (YOLO Model 5-Kelas: Cadar, Mukena, Hijab Syar'i, Non Syar-i, Non Hijab) ──
+                    # Menggunakan area tubuh bagian atas (kepala hingga dada) agar model dapat mengenali mukena dan jilbab syar'i yang menutup dada
+                    upper_bottom = min(h, py1 + int(bh * 0.70)) if sh_y is None else min(h, max(sh_y + 40, py1 + int(bh * 0.55)))
+                    upper_crop = frame[py1:upper_bottom, px1:px2]
                     head_crop = frame[py1:head_bottom, px1:px2]
                     cadar_found = False
                     mukena_found = False
@@ -223,9 +226,9 @@ class AuratDetector:
                     non_hijab_found = False
                     best_conf = 0.0
 
-                    if head_crop.size > 0:
+                    if upper_crop.size > 0:
                         pred_aurat: Any = self.model_aurat.predict(
-                            source=head_crop,
+                            source=upper_crop,
                             conf=0.25,
                             verbose=False,
                             imgsz=224
@@ -249,10 +252,10 @@ class AuratDetector:
                                 elif ("hijabsyar" in l_str or "syar-i" in l_str or "syari" in l_str) and "non" not in l_str:
                                     hijab_syari_found = True
                                     best_conf = max(best_conf, a_conf)
-                                elif "non syar" in l_str and a_conf > 0.35:
+                                elif "non syar" in l_str and a_conf > 0.30:
                                     non_syari_found = True
                                     best_conf = max(best_conf, a_conf)
-                                elif "non hijab" in l_str and a_conf > 0.38:
+                                elif "non hijab" in l_str and a_conf > 0.30:
                                     non_hijab_found = True
                                     best_conf = max(best_conf, a_conf)
 
@@ -514,3 +517,5 @@ class AuratDetector:
             alasan_gate = f"Semua ({total_orang} Orang) Sesuai Kaidah Syariat"
 
         return ada_pelanggaran, alasan_gate, tracked_persons, total_orang
+
+    detect = process_frame
